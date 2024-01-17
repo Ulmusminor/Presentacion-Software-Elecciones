@@ -1,0 +1,691 @@
+---
+title: "Entrega grupal:"
+subtitle: "Trabajo con datos de elecciones nacionales"
+author: "por Marco del Olmo Linares"
+format: 
+  revealjs:
+   self-contained: true
+---
+
+## Librerías
+
+```{r paquetes}
+#| echo: true
+
+rm(list = ls()) # Borramos variables de environment
+library(tidyverse)
+library(lubridate)
+library(sysfonts)
+font_add(family = "GOT", regular = "Game of Thrones.ttf")
+font_add_google(name = "Noto Serif", family = "Noto")
+showtext::showtext_auto()
+```
+
+------------------------------------------------------------------------
+
+## Comentario sobre la temática
+
+-   Estética oscura
+
+-   Luchas de poder
+
+-   Elemento de épica
+
+------------------------------------------------------------------------
+
+![Mi inspiración](inspiracion.png)
+
+------------------------------------------------------------------------
+
+## Desventajas
+
+-   Me estuve peleando con el archivo de style.scss y al final acabé abandonándolo.
+
+-   Tonos claros sobre oscuros son mucho más difíciles de manejar que al revés.
+
+-   Canción de Hielo y Fuego a veces es tonos oscuros sobre oscuros.
+
+PD: Quarto es una costra para hacer presentaciones cuando eres tonto.
+
+---
+
+## Tratamiento de los datos:
+
+```{r}
+#| echo: true
+
+# NO TOQUES NADA
+datos_elecciones <- read_csv(file = "./datos/datos_elecciones_brutos.csv")
+cod_mun <- read_csv(file = "./datos/cod_mun.csv")
+encuestas <- read_csv(file = "./datos/historical_surveys.csv")
+siglas <- read_csv(file = "./datos/siglas.csv")
+```
+
+Vale profe :)
+
+---
+
+## Pasar cosas a tidy:
+
+Con la siguiente tabla vemos qué variables sobran:
+
+```{r}
+dist_x_col <- datos_elecciones |> 
+  summarise(across(everything(), n_distinct))
+
+dist_x_col
+```
+
+471 variables son muchas.
+
+---
+
+```{r}
+datos_elecciones_dist <- datos_elecciones |> 
+  select(which(dist_x_col != 1))
+
+datos_elecciones_dist
+```
+
+12 variables (¿algunas columnas de votos NA?)
+
+---
+
+Pivot longer:
+
+```{r}
+datos_elecciones_dist_votos <- datos_elecciones_dist |> 
+  pivot_longer(cols = `BERDEAK-LOS VERDES`:ncol(datos_elecciones_dist), 
+               values_to = "votos", names_to = "denominacion") |> 
+  drop_na(votos)
+
+datos_elecciones_dist_votos
+```
+
+---
+
+¿Cuántos municipios hay en la base?
+
+```{r}
+datos_elecciones_dist_votos |> 
+  distinct(codigo_municipio)
+```
+
+No tiene pinta, usemos unite.
+
+---
+
+```{r}
+#| echo: true
+
+datos_elecciones_tidy <- datos_elecciones_dist_votos |> 
+  unite("cod_mun", c(codigo_ccaa, codigo_provincia, codigo_municipio), sep = "-") |> 
+  unite("fecha", c(anno, mes), sep = "-") |> 
+  mutate(fecha = ym(fecha))
+
+datos_elecciones_tidy
+```
+
+---
+
+Tratamiento del resto de bases:
+
+```{r}
+siglas |> distinct(denominacion)
+```
+
+```{r}
+siglas_tidy <- siglas |> 
+  distinct(denominacion, .keep_all = TRUE)
+```
+
+```{r}
+encuestas_tidy <- encuestas |> 
+  pivot_longer(cols = 'UCD':ncol(encuestas),
+               names_to = "siglas", values_to = "porcentaje")
+
+encuestas_tidy
+```
+
+```{r problematico}
+datos_elecciones_tidy_ms <- datos_elecciones_tidy |> 
+  inner_join(cod_mun, by = "cod_mun")
+
+datos_elecciones_tidy_ms
+```
+
+```{r masproblematico}
+elecciones_interes <- datos_elecciones_tidy_ms |> 
+  mutate(denominacion2 = case_when(str_detect(string = str_to_upper(denominacion), pattern = "PARTIDO POPULAR|PP") 
+                            ~ "Partido Popular",
+                            str_detect(string = str_to_upper(denominacion), pattern = "PARTIDO SOCIALISTA OBRERO|PARTIT DELS SOCIALISTES|PARTIDO SOCIALISTA DE EUSKADI|PARTIDO DOS SOCIALISTAS DE GALICIA|PARTIT SOCIALISTA|PSOE") 
+                            ~ "Partido Socialista",
+                            str_detect(string = str_to_upper(denominacion), pattern = "CIUDADANOS|CIUTADANS") 
+                            ~ "Ciudadanos",
+                            str_detect(string = str_to_upper(denominacion), pattern = "VOX") 
+                            ~ "VOX",
+                            str_detect(string = str_to_upper(denominacion), pattern = "NACIONALISTA VASCO") 
+                            ~ "Partido Nacionalista Vasco",
+                            str_detect(string = str_to_upper(denominacion), pattern = "NACIONALISTA GALEGO")
+                            ~ "Bloque Nacionalista Galego",
+                            str_detect(string = str_to_upper(denominacion), pattern = "COMPROMÍS")
+                            ~ "Compromís",
+                            str_detect(string = str_to_upper(denominacion), pattern = "CONVERGENCIA") &
+                              str_detect(string = str_to_upper(denominacion), pattern = "UNIO")
+                            ~ "Convergencia i unió",
+                            str_detect(string = str_to_upper(denominacion), pattern = "PODEM| UNIDA")
+                            ~ "Unidas Podemos - IU",
+                            str_detect(string = str_to_upper(denominacion), pattern = "ESQUERRA REPUBLICANA DE CATALUNYA")
+                            ~ "Esquerra Republicana de Catalunya",
+                            str_detect(string = str_to_upper(denominacion), pattern = "BILDU|ALKARTASUNA|ARALAR")
+                            ~ "Euskal Herria - BILDU",
+                            str_detect(string = str_to_upper(denominacion), pattern = "MÁS PAÍS")
+                            ~ "Más país",
+                            TRUE ~ "OTROS"
+                            )) |> 
+  mutate(votos_r = sum(votos),
+         porc_votos = 100*votos_r/(votos_blancos+votos_candidaturas), 
+         .by = c(fecha, cod_mun, denominacion))
+
+elecciones_interes
+```
+
+```{r}
+n_votado <- function(sig, vot, n) {
+  
+  return(sig[order(-vot)[n]])
+}
+```
+
+```{r}
+elecciones_nacnac <- elecciones_interes |> 
+  mutate(territorio = factor(case_when(
+    denominacion2 %in% c("Partido Popular", "Partido Socialista", "Ciudadanos", "VOX", "Unidas Podemos - IU", "Más país")
+    ~ "Partido nacional", 
+    denominacion2 == "OTROS" 
+    ~ "OTROS",
+    TRUE
+    ~ "Partido regionalista")),
+    territorio = fct_relevel(territorio, "Partido nacional", "Partido regionalista"),
+    denominacion2 = factor(denominacion2, levels = c("Partido Socialista", "Partido Popular", "Unidas Podemos - IU", "VOX", "Esquerra Republicana de Catalunya", "Partido Nacionalista Vasco", "Ciudadanos", "Bloque Nacionalista Galego", "Compromís", "Convergencia i unió", "Euskal Herria - BILDU", "OTROS"), ordered = T))
+
+encuestas_tidy_uso <- encuestas_tidy |> 
+  drop_na(size) |> 
+  filter(date_elec > date("2008-01-01"),
+         exit_poll == FALSE,
+         size >= 750,
+         field_date_to - field_date_from != 0
+         ) |>
+  mutate(siglas = ifelse(siglas == "CS", "C's", siglas)) |> 
+  inner_join(siglas_tidy, by = "siglas")
+
+encuestas_tidy_uso
+```
+
+```{r}
+encuestas_final <- encuestas_tidy_uso |> 
+  mutate(denominacion2 = case_when(str_detect(string = str_to_upper(denominacion), pattern = "PARTIDO POPULAR|PP") 
+                            ~ "Partido Popular",
+                            str_detect(string = str_to_upper(denominacion), pattern = "PARTIDO SOCIALISTA OBRERO|PARTIT DELS SOCIALISTES|PARTIDO SOCIALISTA DE EUSKADI|PARTIDO DOS SOCIALISTAS DE GALICIA|PARTIT SOCIALISTA|PSOE") 
+                            ~ "Partido Socialista",
+                            str_detect(string = str_to_upper(denominacion), pattern = "CIUDADANOS|CIUTADANS") 
+                            ~ "Ciudadanos",
+                            str_detect(string = str_to_upper(denominacion), pattern = "VOX") 
+                            ~ "VOX",
+                            str_detect(string = str_to_upper(denominacion), pattern = "NACIONALISTA VASCO") 
+                            ~ "Partido Nacionalista Vasco",
+                            str_detect(string = str_to_upper(denominacion), pattern = "NACIONALISTA GALEGO")
+                            ~ "Bloque Nacionalista Galego",
+                            str_detect(string = str_to_upper(denominacion), pattern = "COMPROMÍS")
+                            ~ "Compromís",
+                            str_detect(string = str_to_upper(denominacion), pattern = "CONVERGENCIA") &
+                              str_detect(string = str_to_upper(denominacion), pattern = "UNIO")
+                            ~ "Convergencia i unió",
+                            str_detect(string = str_to_upper(denominacion), pattern = "PODEM| UNIDA")
+                            ~ "Unidas Podemos - IU",
+                            str_detect(string = str_to_upper(denominacion), pattern = "ESQUERRA REPUBLICANA DE CATALUNYA")
+                            ~ "Esquerra Republicana de Catalunya",
+                            str_detect(string = str_to_upper(denominacion), pattern = "BILDU|ALKARTASUNA|ARALAR")
+                            ~ "Euskal Herria - BILDU",
+                            str_detect(string = str_to_upper(denominacion), pattern = "MÁS PAÍS")
+                            ~ "Más país",
+                            TRUE ~ "OTROS"
+                            ), .by = c(date_elec, id_pollster, denominacion),
+         denominacion2 = factor(denominacion2, levels = c("Partido Socialista", "Partido Popular", "Unidas Podemos - IU", "VOX", "Esquerra Republicana de Catalunya", "Partido Nacionalista Vasco", "Ciudadanos", "Bloque Nacionalista Galego", "Compromís", "Convergencia i unió", "Euskal Herria - BILDU", "OTROS"), ordered = T))
+
+encuestas_final |> filter(denominacion2 == "Ciudadanos", date_elec > "2016-01-01")
+```
+
+```{r}
+porc_encuestas <- encuestas_final |> 
+  summarize(porc_votose = mean(porcentaje, na.rm = T), .by = c(denominacion2, date_elec)) |> 
+  drop_na() |> 
+  separate(date_elec, into = c("Anno", "mes","dia"), sep = "-") |> 
+  select(-dia) |> 
+  unite(col = "fecha", Anno:mes, sep = "-", ) |> 
+  mutate(fecha = as_date(fecha, format = "%Y%m"))
+
+porc_encuestas
+
+porc_reales <- elecciones_nacnac |> 
+  summarise(porc_votos = sum(porc_votos)/8135, .by = c('fecha', 'denominacion2'))
+
+porc_reales
+```
+
+```{r}
+porc_encuestas_casas <- encuestas_final |> 
+  summarize(porc_votose = mean(porcentaje, na.rm = T), .by = c(pollster, denominacion2, date_elec)) |> 
+  drop_na() |> 
+  separate(date_elec, into = c("Anno", "mes","dia"), sep = "-") |> 
+  select(-dia) |> 
+  unite(col = "fecha", Anno:mes, sep = "-", ) |> 
+  mutate(fecha = as_date(fecha, format = "%Y%m"))
+```
+
+```{r}
+totaltotal <- porc_encuestas |> 
+  full_join(porc_reales, by = c("fecha", "denominacion2"))
+
+totaltotal
+```
+
+```{r}
+finalfinalfinal <- porc_encuestas_casas |> full_join(totaltotal |> select(-porc_votose), by = c("denominacion2", "fecha"))
+finalfinalfinal
+```
+
+------------------------------------------------------------------------
+
+## Empezamos con l\@s gráfic\@s:
+
+------------------------------------------------------------------------
+
+## El tema:
+
+```{r}
+#| echo: true
+
+juegodetemas <- function()
+  theme_minimal() +
+  theme(
+ plot.background = element_rect(fill = "#222229"),
+ panel.background = element_rect(fill = "#303030"),
+ text = element_text(color = "#9E772C", family = "Noto"),
+ axis.title = element_text(family = "Noto"),
+ title = element_text(color = "#BE974C", family = "GOT"),
+ panel.grid.major.x = element_blank(),
+ panel.grid.major.y = element_line(color = "#969696"),
+ panel.grid.minor = element_blank(),
+ axis.text = element_text(color = "#D2D3CE"),
+ strip.text.x = element_text(color = "#D2D3CE")
+ )
+```
+
+---
+
+Mirad qué poco éxito tienen los partidos regionalistas, qué vergüenza.
+
+```{r}
+elecciones_nacnac |> 
+  summarise(porc_votos = sum(porc_votos)/8135, .by = c('fecha', 'territorio')) |> 
+  ggplot() +
+  geom_point(aes(y = porc_votos, x = fecha, color = territorio)) +
+  geom_line(aes(y = porc_votos, x = fecha, color = territorio)) +
+  scale_x_date(breaks = elecciones_nacnac |> pull(fecha) |> unique()) +
+  labs(
+    title = "Distribucion del voto nacional",
+    subtitle = "Porcentaje de votos dirigidos a nacionales o regionalistas",
+    y = "%",
+    x = "Año"
+  ) +
+  juegodetemas() +
+  theme(
+    panel.grid.major.x = element_line(color = "#969696", linetype = "dashed")
+  )
+```
+
+------------------------------------------------------------------------
+
+Voto en los centros neurálgicos de la civilización:
+
+```{r}
+elecciones_nacnac |> 
+  filter(censo > 1e5) |> 
+  summarize(ganador = n_votado(sig = denominacion2, vot = votos, n = 1), .by = c(municipio, fecha)) |> 
+  mutate(ganador = factor(ganador, levels = c("Partido Socialista", "Partido Popular", "Unidas Podemos - IU", "VOX", "Esquerra Republicana de Catalunya", "Partido Nacionalista Vasco", "Ciudadanos", "Bloque Nacionalista Galego", "Compromís", "Convergencia i unió", "Euskal Herria - BILDU", "OTROS"))) |> 
+  ggplot() +
+  facet_wrap(~ fecha) +
+  geom_bar(aes(x = ganador, fill = ganador)) +
+  scale_fill_manual(values = c("#8A2835", "#002E4A", "#966BB3", "#6C9A42", "#B85126", "#1B3C05", "#636363")) +
+  scale_x_discrete(breaks = c("Partido Socialista", "Partido Popular", "Unidas Podemos - IU", "VOX", "Esquerra Republicana de Catalunya", "Partido Nacionalista Vasco", "OTROS"), labels = c("PSOE", "PP", "UP-IU", "VOX", "ERC", "PNV", "Otros")) +
+  labs(
+    title = "Partidos ganadores",
+    subtitle = "Numero victorias por partido en municipios de mas de cien mil habitantes",
+    y = "Número",
+    x = "Fecha",
+    color = "Nombre del partido"
+  ) +
+  juegodetemas()
+```
+
+------------------------------------------------------------------------
+
+Campeones y subcampeones: 
+
+```{r}
+elecciones_nacnac |> 
+  summarize(ganador = n_votado(sig = denominacion2, vot = votos, n = 1),
+            segundo = n_votado(sig = denominacion2, vot = votos, n = 2), .by = c(municipio, fecha)) |> 
+  summarize(n = n(), .by = c(ganador, segundo)) |> 
+  drop_na(segundo) |> 
+  mutate(segundo = factor(segundo, levels = c("Partido Socialista", "Partido Popular", "Unidas Podemos - IU", "VOX", "Esquerra Republicana de Catalunya", "Partido Nacionalista Vasco", "Ciudadanos", "Bloque Nacionalista Galego", "Compromís", "Convergencia i unió", "Euskal Herria - BILDU", "OTROS"))) |> 
+  filter(ganador == "Partido Socialista" | ganador == "Partido Popular") |> 
+  ggplot() +
+  facet_grid(~ ganador) +
+  geom_col(aes(x = segundo, y = n, fill = segundo)) +
+  scale_x_discrete(breaks = c("Bloque Nacionalista Galego", "Ciudadanos", "Compromís", "Convergencia i unió", "Esquerra Republicana de Catalunya", "Euskal Herria - BILDU", "Partido Socialista", "Partido Popular", "Unidas Podemos - IU", "VOX", "Partido Nacionalista Vasco", "OTROS"), labels = c("BNG", "Cs", "CCPV", "CiU", "ERC", "EH-BILDU", "PSOE", "PP", "UP-IU", "VOX", "PNV", "Otros")) +
+  scale_fill_manual(values = c("#8A2835", "#002E4A", "#966BB3", "#6C9A42", "#B85126", "#1B3C05", "#D0622B", "#0FD7CC", "#AD3C04", "#282244", "#608E36", "#636363")) +
+  labs(
+    title = "Partido primero y segundo",
+    subtitle = "Recuento de veces que un partido quedó segundo cuando el ganador fue el PP o el PSOE",
+    y = "%",
+    x = "Año",
+    color = "Nombre del partido"
+  ) +
+  juegodetemas() +
+  theme(
+    axis.text.x = element_text(angle = 60, vjust = 0.5) 
+  )
+```
+
+------------------------------------------------------------------------
+
+En los municipios de más de 2000 habitantes, la diferencia es mayor en...
+
+```{r}
+#| echo: true
+
+elecciones_nacnac |> 
+  filter(censo > 2000) |> 
+  slice_max(porc_votos, n = 2, with_ties = F, by = c(fecha, cod_mun)) |> 
+  mutate(diferencia = diff(-porc_votos), .by = c(fecha, cod_mun)) |> 
+  slice_max(diferencia, n = 2, by = fecha) |> 
+  select(c(fecha, municipio, censo, diferencia, denominacion2))
+```
+
+------------------------------------------------------------------------
+
+```{r}
+elecciones_nacnac |> 
+  filter(censo > 2000) |> 
+  slice_max(porc_votos, n = 2, with_ties = F, by = c(fecha, cod_mun)) |> 
+  mutate(diferencia = diff(-porc_votos), .by = c(fecha, cod_mun)) |> 
+  slice_max(diferencia, n = 10, by = fecha)
+```
+
+---
+
+## Votos nulos:
+
+```{r}
+elecciones_nacnac |> 
+  mutate(porc_nulos = votos_nulos*100/votos_candidaturas, .by = c(cod_mun, fecha)) |> 
+  distinct(municipio, .keep_all = T, .by = fecha) |> 
+  slice_max(n = 10, order_by = data_frame(porc_nulos, censo), by = c(fecha)) |> 
+  select(c(fecha, cod_mun, municipio, censo, votos_nulos, porc_nulos)) |> 
+  slice_head(n = 1, by = fecha)
+```
+
+------------------------------------------------------------------------
+
+## ¿Quién gana en los municipios con mayor/menor participación?
+
+```{r}
+elecciones_part <- elecciones_nacnac |> 
+  filter(censo > 2e3) |> 
+  mutate(participacion_t = votos_candidaturas*100/censo, .by = c(cod_mun, fecha))
+  
+elecciones_part |> 
+  select(c(fecha, municipio, censo, votos_candidaturas, participacion_t))
+```
+
+------------------------------------------------------------------------
+
+```{r}
+elecciones_part |> 
+  mutate(fechaf = factor(fecha)) |> 
+  ggplot() +
+  geom_boxplot(aes(y = participacion_t, x = fechaf, group = fecha), 
+               color = "#D2D3CE", fill = "#636363") +
+  labs(
+    title = "Participacion nacional",
+    subtitle = "Porcentaje de participacion a traves de los municipios",
+    y = "Participación (%)",
+    x = "Fecha"
+  ) +
+  juegodetemas()
+```
+
+------------------------------------------------------------------------
+
+## Ganadores en lugares de mayor participación:
+
+```{r}
+elecciones_partmax <- elecciones_part |> 
+  slice_max(n = 1, order_by = votos_r, by = c(cod_mun, fecha)) |> 
+  slice_max(n = 10, order_by = participacion_t, by = c(fecha))
+
+elecciones_partmax |> count(denominacion2) |> 
+  arrange(-n)
+```
+
+------------------------------------------------------------------------
+
+## Ganadores en lugares de menor participación:
+
+```{r}
+elecciones_partmin <- elecciones_part |> 
+  slice_max(n = 1, order_by = votos_r, by = c(cod_mun, fecha)) |> 
+  slice_min(n = 10, order_by = participacion_t, by = c(fecha))
+
+elecciones_partmin |> count(denominacion2) |> 
+  arrange(-n)
+```
+
+------------------------------------------------------------------------
+
+## ¿A quién beneficia la abstención?
+
+```{r}
+p <- elecciones_nacnac |> 
+  filter(denominacion2 != "OTROS") |> 
+  ggplot() +
+  facet_wrap(~ denominacion2) +
+  geom_point(aes(y = votos_r*100/censo, x = censo), color = "#FC8D0B", alpha = 0.01) +
+  stat_smooth(aes(y = votos_r*100/censo, x = censo), color = "#FC8D0B", formula = y ~ x, method = "gam") +
+  scale_x_log10() +
+  labs(
+    title = "Participacion por partido",
+    subtitle = "Porcentaje de votos frente a censo del municipio",
+    y = "%",
+    x = "Año"
+  ) +
+  juegodetemas()
+
+p
+```
+
+Viendo los datos anteriores y estos, quizá sería mejor que hiciéramos un modelo matemático y viésemos. 
+
+------------------------------------------------------------------------
+
+## Encuestas
+
+```{r}
+q <- encuestas_final |> 
+  drop_na(porcentaje, field_date_to, denominacion2) |> 
+  ggplot() +
+  geom_point(aes(y = porcentaje, x = field_date_to, color = denominacion2)) +
+  geom_smooth(aes(y = porcentaje, x = field_date_to, color = denominacion2), formula = y ~ x, method = "loess") +
+  scale_color_manual(values = c("#8A2835", "#002E4A", "#966BB3", "#6C9A42", "#B85126", "#1B3C05", "#D0622B", "#0FD7CC", "#AD3C04", "#282244", "#608E36", "#636363")) +
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  labs(
+    title = "Evolución de la intención de voto",
+    subtitle = "Porcentaje de intencion en las siguientes elecciones",
+    y = "Voto (%)",
+    x = "Año",
+    color = "Nombre del partido"
+  ) +
+  juegodetemas()
+
+plotly::ggplotly(q)
+```
+
+Algo falla.
+
+------------------------------------------------------------------------
+
+He seleccionado el tramo de las encuestas que me gusta, no estoy manipulando los datos, lo prometo.
+
+```{r}
+encuestas_final |> 
+  drop_na(porcentaje, field_date_to, denominacion2) |> 
+  filter(field_date_to < "2012-01-01") |> 
+  ggplot() +
+  geom_point(aes(y = porcentaje, x = field_date_to, color = denominacion2)) +
+  geom_smooth(aes(y = porcentaje, x = field_date_to, color = denominacion2), formula = y ~ x, method = "loess") +
+  scale_color_manual(values = c("#8A2835", "#002E4A", "#966BB3", "#B85126", "#1B3C05", "#0FD7CC", "#282244", "#636363")) +
+  scale_x_date(date_breaks = "1 year", date_labels = "%Y") +
+  labs(
+    title = "Evolucion de la intencion de voto",
+    subtitle = "Porcentaje de intencion en las siguientes elecciones",
+    y = "Voto (%)",
+    x = "Año",
+    color = "Nombre del partido"
+  ) +
+  juegodetemas()
+```
+
+------------------------------------------------------------------------
+
+Aquí es donde extrapolaría las curvas de regresión y me darían un ascenso.
+
+```{r}
+porc_reales |> 
+  summarize(porc_votos = mean(porc_votos), .by = c(fecha, denominacion2)) |>
+  drop_na(porc_votos, fecha, denominacion2) |> 
+  ggplot() +
+  geom_point(aes(y = porc_votos, x = fecha, color = denominacion2), size = 2) +
+  geom_line(aes(y = porc_votos, x = fecha, color = denominacion2)) +
+  geom_smooth(data = encuestas_final |> drop_na(porcentaje, field_date_to, denominacion2) |> filter(field_date_to < "2012-01-01"), 
+              aes(y = porcentaje, x = field_date_to, color = denominacion2), formula = y ~ x, method = "loess") +
+  scale_color_manual(values = c("#8A2835", "#002E4A", "#966BB3", "#6C9A42", "#B85126", "#1B3C05", "#D0622B", "#0FD7CC", "#AD3C04", "#282244", "#608E36", "#636363")) +
+  scale_x_date(breaks = elecciones_nacnac |> pull(fecha) |> unique()) +
+  labs(
+    title = "Combinacion de las predicciones de las encuestas y los votos reales",
+    subtitle = "Porcentaje de intencion en las siguientes elecciones - Porcentaje de votos en las elecciones",
+    y = "Voto (%)",
+    x = "Año",
+    color = "Nombre del partido"
+  ) +
+  juegodetemas() +
+  theme(
+    panel.grid.major.x = element_line(color = "#969696", linetype = "dashed")
+  )
+```
+
+------------------------------------------------------------------------
+
+Suponiendo que los datos a partir de las segundas elecciones están bien.
+
+```{r}
+totaltotal |> 
+  mutate(difporc = abs(porc_votose-porc_votos)) |> 
+  drop_na(difporc) |> 
+  summarize(suma = sum(difporc), .by = fecha)
+```
+
+------------------------------------------------------------------------
+
+¿De qué partidos se subestima el voto?
+
+```{r}
+totaltotal |> 
+  mutate(difporc = porc_votose-porc_votos) |> 
+  drop_na(difporc) |> 
+  summarize(suma = sum(difporc), .by = c(denominacion2, fecha)) |> 
+  slice_min(order_by = suma, by = c(fecha), n = 1)
+```
+
+------------------------------------------------------------------------
+
+¿De qué partidos se sobrestima el voto más?
+
+```{r}
+totaltotal |> 
+  mutate(difporc = porc_votose-porc_votos) |> 
+  drop_na(difporc) |> 
+  summarize(suma = sum(difporc), .by = c(denominacion2, fecha)) |> 
+  slice_max(order_by = suma, by = c(fecha), n = 1)
+```
+
+------------------------------------------------------------------------
+
+La verdad es que esta gráfica no aporta mucho, ¿no? O sea, pensadlo, si yo mismo he dicho que a partir de las segundas elecciones los datos están mal, tampoco es que esto signifique nada.
+
+```{r}
+totaltotal |> 
+  mutate(difporc = porc_votose-porc_votos) |> 
+  drop_na(difporc) |> 
+  summarize(suma = sum(difporc), .by = c(denominacion2, fecha)) |> 
+  ggplot() +
+  geom_line(aes(y = suma, x = fecha, color = denominacion2), linewidth = 1) +
+  scale_color_manual(values = c("#8A2835", "#002E4A", "#966BB3", "#6C9A42", "#B85126", "#1B3C05", "#D0622B", "#0FD7CC", "#AD3C04", "#636363")) +
+  scale_x_date(breaks = elecciones_nacnac |> pull(fecha) |> unique()) +
+  juegodetemas() +
+  labs(
+    title = "Encuestas vs Realidad",
+    subtitle = "Cambio porcentual en las predicciones de las encuestas frente al resultado real",
+    y = "Error (%)",
+    x = "Fecha",
+    color = "Nombre del partido"
+  ) +
+  theme(
+    panel.grid.major.x = element_line(color = "#969696", linetype = "dashed")
+  )
+```
+
+------------------------------------------------------------------------
+
+¿Qué casas encuestadoras se equivocan más?
+
+```{r}
+finalfinalfinal |> 
+  mutate(difporc = abs(porc_votose-porc_votos)) |> 
+  drop_na(difporc) |> 
+  summarize(suma = sum(difporc), .by = c(pollster, fecha)) |> 
+  slice_max(suma, n = 1, by = c(fecha))
+```
+
+---
+
+## Un meme para finalizar:
+
+![](boromir.png)
+
+---
+
+## Ahora sí:
+
+![Gracias Ned Estar (nunca supe como se escribe)](jonnieve.png)
+
+------------------------------------------------------------------------
+
+## Muchas gracias
+
+Dejo el código (y por extensión el tema) en Github:
+
+https://github.com/Ulmusminor/Presentacion-Software-Elecciones/upload
+
+Duración del trabajo: 40 horas y 700 líneas de código.
